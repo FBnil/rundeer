@@ -1,0 +1,427 @@
+#!/bin/bash
+# __________                  .___
+# \______   \__ __  ____    __| _/____   ___________
+#  |       _/  |  \/    \  / __ |/ __ \_/ __ \_  __ \
+#  |    |   \  |  /   |  \/ /_/ \  ___/\  ___/|  | \/
+#  |____|_  /____/|___|  /\____ |\___  >\___  >__|
+#         \/           \/      \/    \/     \/
+#
+# rundeer - Remote exection script. CopyLeft 2019 FBnil  License=https://unlicense.org/
+# __BUILD_DATE
+
+# Allow for debugging (careful: it displays your password!)
+if [ 0"$DEBUG" -gt 1 ];then
+	set -x
+fi
+
+# allow getting the relative path, even if we use a symlink
+if [ -L "$0" ];then
+	REALME=$(readlink "$0")
+	ME=$(basename "$REALME")
+	MP=$(dirname "$REALME")
+else
+	ME=$(basename "$0")
+	MP=$(dirname "$0")
+fi
+MB="${ME%.*}"
+
+# Our password(s) file, .rundeer
+PASSFILE="$MP/.$MB"
+# Our configuration file, rundeer.cfg
+CFGFILE="$MP/$MB.cfg"
+
+# maybe the companion scripts want to use these variables, so we export them
+export VERSION=0.9.6
+export RUSER=${USER:-$(whoami)}
+export VERBOSE=0
+export CLEANUP=1
+export MODULES="$MP/modules"
+export OUTDIR="$MP/report"
+export P_SCP="-r -C"
+export P_SSH="-tC"
+export RSERVER;
+export PAPERTRAIL
+export ISDIR=0
+export TMPDIR=/tmp
+export SKIP=0
+
+
+# Read the config file or guess which sshpass to use
+if [ ! -f "$CFGFILE" ];then
+	echo "WARNING: Please create '$CFGFILE' and add the OUTDIR=./report"
+else
+	source "$CFGFILE"
+	if [ ! -d "$OUTDIR" ];then
+		CMD="mkdir '$OUTDIR'"
+		$CMD || (echo "FATAL: $CMD  $!";exit 2)
+	fi
+	if [ -z "$SSHPASSBIN" ];then
+		SSHPASSBIN=$(which sshpass 2>/dev/null)
+		if [ $? != 0 ];then
+			SSHPASSBIN=$MP/sshpass.exp
+			which expect 2>/dev/null 2>&1
+			if [ $? != 0 ];then
+				SSHPASSBIN=$MP/sshpass.pl
+			fi
+		else
+			SSHPASSBIN="$SSHPASSBIN -e"
+		fi
+	fi
+fi
+
+# make sure our methods to be run remotely are readable to us
+function ReadableOrDie {
+	_FN=$1
+	_ISDIR=$2
+
+	if [ ! -f "$_FN" ];then
+		if (($_ISDIR == 0 ));then
+			echo "File Not Found: $_FN"
+		else
+			echo "Directory not found: $_FN"
+		fi
+		exit 2
+	fi
+
+	if [ ! -r "$_FN" ];then
+		echo "Unable to read $_FN"
+		exit 2
+	fi
+}
+
+# Determine if it is a file or a directory we need to run remotely
+function getpayload {
+	echo "$PAYLOAD" | grep -q /
+	if [ $? != 0 ];then
+		PAYLOAD="$MODULES/$PAYLOAD"
+	fi
+
+	if [ -d "$PAYLOAD" ];then
+		ISDIR=1
+	else
+		ISDIR=0
+	fi
+	if [ $ISDIR == 0 ];then
+		SCRIPT="$PAYLOAD"
+	else
+		DIR="$PAYLOAD"
+		SCRIPT="$DIR/run.sh"
+	fi
+	ReadableOrDie "$SCRIPT" "$ISDIR"
+}
+
+# if we are a symlink, use that as the module name.
+if [ -L "$0" ];then
+	PAYLOAD="$MODULES/$(basename $0)"
+	getpayload
+fi
+
+USAGE="*** rundeer version $VERSION ***
+ Usage: ./rundeer [-p n] [-u user] <-s host|-f file> < -m script|dir > [-k] [-o dir] [-t <date>]
+ -s: Servername/ipaddress for single run
+ -f: file with on each line a servername/ipaddress
+ -m: file to be executed remotely (must be executable) OR
+	directory to be send, and run run.sh inside that directory
+ -u: change default user ($RUSER)
+ -k: keep remote file(s)
+ -o: Output directory of the log files.
+ -p: number of parallel processes to run to get the job done. (use -p 0 for nr of processors)
+ -t: cutoff time to re-run instead of keeping the datafile. format is that of date --date
+ Requires: rundeer.cfg and .rundeer
+"
+
+# Should never happen, but...
+if [ -f "$TMPDIR/$ME.$$" ];then
+	rm "$TMPDIR/$ME.$$"
+fi
+
+# Get the parameter options (these take precedence over the ones in rundeer.cfg)
+NPARAMS=$#
+while getopts "vu:\?hks:f:m:p:t:" opt; do
+	case ${opt} in
+		v )
+			VERBOSE=1
+			;;
+		u )
+			RUSER=$OPTARG
+			;;
+		\?)
+			echo "$USAGE"
+			exit 0
+			;;
+		h )
+			echo "$USAGE"
+			exit 0
+			;;
+		k )
+			CLEANUP=0
+			;;
+		s )
+            # run on single server
+			SERVER=$OPTARG
+			# allow for -f file1 -s and_a_server
+			if [[ ! -z "$SERVERFILE" && "$SERVERFILE" -ne "$TMPDIR/$ME.$$" ]];then
+				cat "$SERVERFILE" > "$TMPDIR/$ME.$$"
+			fi
+			SERVERFILE="$TMPDIR/$ME.$$"
+			# allow for -s server1,server2 -s server3
+			echo "$SERVER" |tr ',' '\n' >> "$SERVERFILE"
+			;;
+		f )
+            # get from a file
+			if [ ! -z "$SERVERFILE" ];then
+				echo "FATAL: Unable to use multiple -f/-s"
+				exit 1
+			fi
+			SERVERFILE=$OPTARG
+			ReadableOrDie "$SERVERFILE" 1
+			;;
+		m )
+            # Module to run
+			PAYLOAD="$OPTARG"
+			getpayload
+			;;
+		p )
+            # Run in parallel
+			NUM_PROC=$OPTARG
+			if [ $NUM_PROC == 0 ];then
+				NUM_PROC=$(cat /proc/cpuinfo | awk '/^processor/{print $3}'| wc -l)
+			fi
+			;;
+		t )
+            # do not run on machines that have outdated ./report/ results
+			TCUTOFF=$OPTARG
+			;;
+		: )
+			echo "Invalid option: $OPTARG requires an argument" 1>&2
+			echo "$USAGE"
+			exit 1
+			;;
+		* )
+			echo "Invalid option: $OPTARG" 1>&2
+			echo "$USAGE"
+			exit 1
+			;;
+	esac
+done
+
+# Flush all processed arguments
+if [ ! -z "$OPTINT"];then
+	shift $(($OPTINT - 1))
+else
+	if [ 0"$OPTERR" -eq "1" ];then
+		shift $(($OPTIND - 1))
+	fi
+fi
+
+# This way we allow for a server file without using -f
+if [[ $# -eq 1  ]] && [[ -z "$SERVERFILE" ]];then
+	SERVERFILE=$1
+	ReadableOrDie "$SERVERFILE" 0
+fi
+
+# Do not run if we have the minimal required parameters
+if (( $NPARAMS == 0 )) || ( [ -z "$SERVER" ] && [ -z "$SERVERFILE" ] ) || ( [ -z "$SCRIPT" ] ); then
+	echo "$USAGE"
+	exit 1
+fi
+
+# calculate the 'outdated' cutoff time
+if [ ! -z "$TCUTOFF" ];then
+	TCUTOFF=$(date --date "$TCUTOFF" +%s)
+	if [ $? != 0 ];then
+		echo "Wrong -t format"
+		exit 1
+	fi
+fi
+
+# file needs to be executable on source to arrive as executable remotely.
+if [ ! -x "$SCRIPT" ];then
+	msg="FATAL: Script '$SCRIPT' is not executable!"
+	if [ 0"$AUTOFIX" == 0 ];then
+		echo $msg
+		exit 2
+	fi
+	chmod +x "$SCRIPT" || (echo $msg ; exit 2)
+fi
+
+# Basic header to know where and when it ran
+export CMD="echo -n 'HOSTNAME=';hostname;date +%F_%H:%M"
+# Also add the actions to run the module.
+export PNAME=$(basename "$PAYLOAD")
+if [ $ISDIR == 1 ];then
+	CMD="$CMD;cd ./$PNAME && ./run.sh;cd -"
+else
+	CMD="$CMD;./$PNAME"
+fi
+if [ $CLEANUP == 1 ];then
+	CMD="$CMD;rm -r ./$PNAME"
+fi
+
+# only visible when debug is enabled
+echo "REMOTECOMMAND: ($CMD) ($PAYLOAD) ISDIR=$ISDIR" >/dev/null
+
+# TODO: Error when $RUSER changes and password has to be supplied again (instead of cache it, or loop check first).
+function getpass {
+	if [ -f "$PASSFILE" ];then
+		# warning sanity check if world-accessible password file
+		ISWORLDREADABLE=$(($(stat -c %a "$PASSFILE" ) & 6))
+		if [ 0"$ISWORLDREADABLE" -gt 0 ];then
+			echo "WARNING: Passwordfile $PASSFILE is too open, refusing to run."
+			exit 3
+		fi
+		export SSHPASS=$(grep -i $RUSER,$RSERVER= "$PASSFILE" | cut -d= -f2-)
+		if [ -z "$SSHPASS" ];then
+			export SSHPASS=$(grep -i $RUSER= "$PASSFILE" | cut -d= -f2-)
+		fi
+		if [ -z "$SSHPASS" ];then
+			export SSHPASS=$(cat "$PASSFILE" | head -1 )
+		fi
+		if [ -z "$SSHPASS"  ];then
+			echo "WARNING: Unable to auto-get password, will ask for it"
+		fi
+	fi
+	if [ -z "$SSHPASS" ];then
+		echo -n "Password for $RUSER:"
+		read -s SSHPASS
+		export SSHPASS
+		PASSFILE=""
+	fi
+}
+
+function roulatelog {
+	#echo "roulatelog:" 1>&2
+	if [ ! -z "$OUTDIR" ];then
+		PAPERTRAIL="$OUTDIR/$RSERVER.$PNAME"
+		#echo "roulatelog: PAPERTRAIL=$PAPERTRAIL" 1>&2
+		if [ -f "$PAPERTRAIL" ];then
+			SKIP=0
+			AGO=1
+			if [ ! -z "$TCUTOFF" ];then
+				# can also use stat -c %Y $PAPERTRAIL but it's 200% less efficient
+				# WARNING: only GNU tools work.
+				# https://unix.stackexchange.com/questions/2987/how-do-i-convert-an-epoch-timestamp-to-a-human-readable-format-on-the-cli
+				PCUTOFF=$(date -r "$PAPERTRAIL" +%s)
+				NOW=$(date +%s)
+				if [ $TCUTOFF -ge $NOW ];then
+					AGO=0
+					TCUTOFF=$((2*$NOW - $TCUTOFF))
+				fi
+				[ $PCUTOFF -ge $TCUTOFF ] && SKIP=1
+				[ $AGO -eq 0 ] && SKIP=$((1 - $SKIP))
+			fi
+			if [ $SKIP = 0 ];then
+				mv "$PAPERTRAIL" "$PAPERTRAIL.old"
+				touch "$PAPERTRAIL.running"
+			fi
+		else
+			touch "$PAPERTRAIL.running"
+		fi
+	else
+		PAPERTRAIL=""
+	fi
+}
+
+# get the remote server name
+function getrserver {
+	if echo "$RSERVER" | grep -q ","; then
+		USER=$(echo "$RSERVER" |cut -d, -f1)
+		if [ x"$RUSER" != x"$USER"];then
+			RUSER=$USER
+			SSHPASS=""
+		fi
+		RSERVER=$(echo "$RSERVER" |cut -d, -f2)
+	fi
+	RSERVER=$(echo "$RSERVER" |tr '[:upper:]' '[:lower:]')
+	if [ ! -z "$RSERVER" ];then
+		# Ensure the remote server is in the known_hosts file
+		# Wide open to Man-in-the-middle attacks by not verifying keys yourself!
+		ssh-keygen -F "$RSERVER" 1>/dev/null || ssh-keyscan -t rsa,dsa  "$RSERVER" >> ~/.ssh/known_hosts 2>/dev/null
+	fi
+}
+
+PFILE="$TMPDIR/$ME.parallel.$$"
+# Initialize Parallel processing file
+if [ ! -z "$NUM_PROC" ];then
+	>"$PFILE"
+fi
+function parallelrunwhatwehave {
+	lines=$(wc -l "$PFILE")
+	echo "We have $lines items in our parallel file $PFILE please wait..."
+	< $PFILE xargs -d '\n' -P $NUM_PROC -I {} /bin/bash -c "{}"
+	echo "done, continuing!"
+}
+
+function runremotely {
+	if [ $ISDIR == 0 ];then
+		$SSHPASSBIN ssh $P_SSH $RUSER@$RSERVER 'bash -s' 2>&1 < $PAYLOAD
+	else
+		$SSHPASSBIN scp $P_SCP $PAYLOAD $RUSER@$RSERVER: 2>&1
+		$SSHPASSBIN ssh $P_SSH $RUSER@$RSERVER "$CMD" 2>&1
+
+		if [ -f "$PAYLOAD/.get" ];then
+			if [ -z "$OUTDIR" ];then
+				echo "WARNING: Unable to get files without an OUTDIR directory"
+			fi
+			cat "$PAYLOAD/.get" 2>/dev/null | while read fn; do
+				bfn=$(basename "$fn")
+				echo "#SCP#$RSERVER:$fn -> $OUTDIR/$RSERVER-$bfn"
+				$SSHPASSBIN scp $RUSER@$RSERVER:"$fn" "$OUTDIR/$RSERVER-$bfn"
+			done
+		fi
+
+		if [ -f "$PAYLOAD/.rm" ];then
+			if [ -z "$OUTDIR" ];then
+				echo "WARNING: Unable to remove files without an OUTDIR directory"
+			fi
+			cat "$PAYLOAD/.rm" 2>/dev/null | while read fn; do
+				bfn=$(basename "$fn")
+				echo "#RM#$RSERVER:$fn"
+				$SSHPASSBIN ssh $RUSER@$RSERVER "rm --interactive=never '$fn'"
+			done
+		fi
+
+	fi
+}
+
+
+# Loop for all remote machines
+cat "$SERVERFILE" | while read RSERVER;
+	do
+		getrserver
+		if [[ -z "$SSHPASS" && ! -z "$NUM_PROC" ]];then
+			parallelrunwhatwehave
+			# empty our workfile to reuse it for the next loop
+			>"$PFILE"
+		fi
+		roulatelog
+		if [ $SKIP == 1 ];then
+			echo "SKIP: $RSERVER"
+			continue
+		fi
+		getpass
+		if [[ ! -z "$NUM_PROC" && ! -z "$PAPERTRAIL" ]];then
+			PCMD="$0 -m $PAYLOAD -s $RSERVER -u $RUSER"
+			[ $CLEANUP == 0 ] && PCMD="$PCMD -k"
+			# push command for single server into parallel processing file
+			echo "$PCMD" >> "$PFILE"
+		else
+			if [ -z "$OUTDIR" ];then
+		        runremotely
+		    else
+		        runremotely |tee "$PAPERTRAIL.running"
+				mv "$PAPERTRAIL.running" "$PAPERTRAIL"
+			fi
+		fi
+	done
+
+# remove temporal hostfile
+if [ ! -z "$SERVER" ];then
+	rm "$SERVERFILE"
+fi
+
+# if we have a parallel file, run it.
+if [ -f "$PFILE" ];then
+	parallelrunwhatwehave
+	rm "$PFILE"
+fi

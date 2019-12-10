@@ -1,0 +1,83 @@
+#!/usr/bin/expect 
+
+# rundeer - Remote exection script. CopyLeft 2019 FBnil  License=https://unlicense.org/
+# companion script: sshpass.exp - Emulate sshpass using expect
+
+# Source: 
+# https://stackoverflow.com/questions/10237872/expect-redirect-stdin
+
+# Enable debugging:
+#exp_internal 1
+
+set version 1.0.0
+set timeout 30
+
+if {[info exists env(TIMEOUT)]} {
+	set timeout "$env(TIMEOUT)"
+    # puts "OVERRIDING TIMEOUT=$timeout"
+}
+
+set lepassword "$env(SSHPASS)"
+
+if {[info exists env(DEBUG)]} {
+    set ledebug "$env(DEBUG)"
+}
+
+set USAGE "sshpass.ext <command and params>\nYou also need exported environment variables: SSHPASS"
+
+set argsCount [llength $argv];
+if {$argsCount eq 0 || $lepassword eq "" } {
+	send_user "$USAGE"
+	exit
+}
+
+set cmd [lindex $argv 0]
+set arguments [ lrange $argv 1 end ]
+
+if { $ledebug eq "2" } {
+	send_user "# DEBUG: Running $cmd $arguments\n"
+}
+
+eval spawn $cmd $arguments
+
+set passworded 0
+expect {
+	"Are you sure you want to continue connecting (yes/no)?" { send "yes\r"; exp_continue; }
+	"Permission denied, please try again.*" { send_user "\nE101: SSH failure"; exit 1; }
+	timeout { send_user "\nE102: SSH failed to get password prompt"; exit 1; }
+	"Domain: " { send_user "\nE103: Windows machine!"; exit 1; }
+    "assword:" { 
+		send "$lepassword\r";
+        set passworded 1
+		expect { 
+			"\r\n" { }
+			" " { exp_continue; }
+		}
+	}
+    eof {}
+}
+
+if { $passworded eq 0 } {
+    send_user "Error: Out of loop, but did not send password!\n";
+    exit
+}
+# set info [wait]
+
+# send the script you read on stdin to the remote host
+while {[gets stdin line] != -1} {
+    send "$line\n"
+}
+# send ctrl-D to signal end of stdin
+send \004
+
+# Do not use interact
+# interact
+
+expect {
+  "END_TOKEN_OF_SCRIPT" {
+    exit 0
+  }
+  default {
+    exit 1
+  }
+}
