@@ -1,6 +1,6 @@
 #!/usr/bin/expect 
 
-# rundeer - Remote exection script. CopyLeft 2019 FBnil  License=https://unlicense.org/
+# rundeer - Remote exection script. @2019 FBnil  License=http://www.wtfpl.net/
 # companion script: sshpass.exp - Emulate sshpass using expect
 
 # Source: 
@@ -9,19 +9,19 @@
 # Enable debugging:
 #exp_internal 1
 
-set version 1.0.0
+set version 1.0.1
 set timeout 30
 
 if {[info exists env(TIMEOUT)]} {
 	set timeout "$env(TIMEOUT)"
-    # puts "OVERRIDING TIMEOUT=$timeout"
+	# puts "OVERRIDING TIMEOUT=$timeout"
 }
 
 set lepassword "$env(SSHPASS)"
 
 set ledebug "0"
 if {[info exists env(DEBUG)]} {
-    set ledebug "$env(DEBUG)"
+	set ledebug "$env(DEBUG)"
 }
 
 set USAGE "sshpass.ext <command and params>\nYou also need exported environment variables: SSHPASS"
@@ -47,26 +47,26 @@ expect {
 	"Permission denied, please try again.*" { send_user "\nE101: SSH failure"; exit 1; }
 	timeout { send_user "\nE102: SSH failed to get password prompt"; exit 1; }
 	"Domain: " { send_user "\nE103: Windows machine!"; exit 1; }
-    "assword:" { 
+	"assword:" { 
 		send "$lepassword\r";
-        set passworded 1
+		set passworded 1
 		expect { 
 			"\r\n" { }
 			" " { exp_continue; }
 		}
 	}
-    eof {}
+	eof {}
 }
 
 if { $passworded eq 0 } {
-    send_user "Error: Out of loop, but did not send password!\n";
-    exit
+	send_user "Error: Out of loop, but did not send password!\n";
+	exit
 }
 # set info [wait]
 
 # send the script you read on stdin to the remote host
 while {[gets stdin line] != -1} {
-    send "$line\n"
+	send "$line\n"
 }
 # send ctrl-D to signal end of stdin
 send \004
@@ -75,10 +75,10 @@ send \004
 # interact
 
 expect {
-  "END_TOKEN_OF_SCRIPT" {
-    exit 0
-  }
-  default {
-    exit 1
-  }
+	"END_TOKEN_OF_SCRIPT" {
+		exit 0
+	}
+	default {
+		exit 1
+	}
 }
