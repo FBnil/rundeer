@@ -157,7 +157,7 @@ while getopts "vu:\?hks:f:m:p:t:" opt; do
 			CLEANUP=0
 			;;
 		s )
-            # run on single server
+			# run on single server
 			SERVER=$OPTARG
 			# allow for -f file1 -s and_a_server
 			if [[ ! -z "$SERVERFILE" && "$SERVERFILE" -ne "$TMPDIR/$ME.$$" ]];then
@@ -168,7 +168,7 @@ while getopts "vu:\?hks:f:m:p:t:" opt; do
 			echo "$SERVER" |tr ',' '\n' >> "$SERVERFILE"
 			;;
 		f )
-            # get from a file
+			# get from a file
 			if [ ! -z "$SERVERFILE" ];then
 				echo "FATAL: Unable to use multiple -f/-s"
 				exit 1
@@ -177,19 +177,19 @@ while getopts "vu:\?hks:f:m:p:t:" opt; do
 			ReadableOrDie "$SERVERFILE" 1
 			;;
 		m )
-            # Module to run
+			# Module to run
 			PAYLOAD="$OPTARG"
 			getpayload
 			;;
 		p )
-            # Run in parallel
+			# Run in parallel
 			NUM_PROC=$OPTARG
 			if [ $NUM_PROC == 0 ];then
 				NUM_PROC=$(cat /proc/cpuinfo | awk '/^processor/{print $3}'| wc -l)
 			fi
 			;;
 		t )
-            # do not run on machines that have outdated ./report/ results
+			# do not run on machines that have outdated ./report/ results
 			TCUTOFF=$OPTARG
 			;;
 		: )
@@ -392,7 +392,7 @@ function runremotely {
 cat "$SERVERFILE" | while read RSERVER;
 	do
 		getrserver
-        # if the password changed for the next set of machines, run the current set
+		# if the password changed for the next set of machines, run the current set
 		if [[ -z "$SSHPASS" && ! -z "$NUM_PROC" ]];then
 			parallelrunwhatwehave
 			# empty our workfile to reuse it for the next loop
