@@ -340,11 +340,13 @@ function getrserver {
 	fi
 }
 
-PFILE="$TMPDIR/$ME.parallel.$$"
 # Initialize Parallel processing file
+PFILE="$TMPDIR/$ME.parallel.$$"
 if [ ! -z "$NUM_PROC" ];then
 	>"$PFILE"
 fi
+
+# If -p is set, then let xargs run it in parallel
 function parallelrunwhatwehave {
 	lines=$(wc -l "$PFILE")
 	echo "We have $lines items in our parallel file $PFILE please wait..."
@@ -352,6 +354,7 @@ function parallelrunwhatwehave {
 	echo "done, continuing!"
 }
 
+# our main worker function
 function runremotely {
 	if [ $ISDIR == 0 ];then
 		$SSHPASSBIN ssh $P_SSH $RUSER@$RSERVER 'bash -s' 2>&1 < $PAYLOAD
@@ -389,6 +392,7 @@ function runremotely {
 cat "$SERVERFILE" | while read RSERVER;
 	do
 		getrserver
+        # if the password changed for the next set of machines, run the current set
 		if [[ -z "$SSHPASS" && ! -z "$NUM_PROC" ]];then
 			parallelrunwhatwehave
 			# empty our workfile to reuse it for the next loop
