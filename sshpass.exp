@@ -19,6 +19,7 @@ if {[info exists env(TIMEOUT)]} {
 
 set lepassword "$env(SSHPASS)"
 
+set ledebug "0"
 if {[info exists env(DEBUG)]} {
     set ledebug "$env(DEBUG)"
 }
