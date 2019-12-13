@@ -350,6 +350,7 @@ fi
 function parallelrunwhatwehave {
 	lines=$(wc -l "$PFILE")
 	echo "We have $lines items in our parallel file $PFILE please wait..."
+	# source: https://blog.programster.org/easily-parallelize-commands-in-linux
 	< $PFILE xargs -d '\n' -P $NUM_PROC -I {} /bin/bash -c "{}"
 	echo "done, continuing!"
 }
